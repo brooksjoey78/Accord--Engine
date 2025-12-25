@@ -83,7 +83,15 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info("control_plane_starting")
-    await db.init_models()
+    
+    # Initialize database (with error handling)
+    try:
+        await db.init_models()
+        logger.info("database_initialized")
+    except Exception as e:
+        logger.error("database_init_failed", error=str(e))
+        # Continue anyway - database might be temporarily unavailable
+        # The app can still serve requests, but job operations will fail
     
     # Initialize browser pool (if Execution Engine available)
     global browser_pool

@@ -62,9 +62,19 @@ class Database:
             logger.info("Skipping init_models (migrations should be used in production)")
             return
         
-        async with self._engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
-        logger.info("control_plane_tables_initialized (dev mode - use migrations in production)")
+        # Add connection timeout
+        import asyncio
+        try:
+            async with asyncio.timeout(10):  # 10 second timeout
+                async with self._engine.begin() as conn:
+                    await conn.run_sync(SQLModel.metadata.create_all)
+            logger.info("control_plane_tables_initialized (dev mode - use migrations in production)")
+        except asyncio.TimeoutError:
+            logger.warning("database_connection_timeout - tables may not be initialized")
+            raise
+        except Exception as e:
+            logger.error("database_init_error", error=str(e))
+            raise
     
     async def dispose(self) -> None:
         """Close database connections."""
