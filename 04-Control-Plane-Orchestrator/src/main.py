@@ -17,7 +17,7 @@ from redis.asyncio import Redis
 from .config import ControlPlaneSettings
 from .database import Database
 from .control_plane.job_orchestrator import JobOrchestrator
-from .control_plane.models import JobStatus
+from .control_plane.models import JobStatus, Job
 
 # Execution Engine imports (optional - will fail gracefully if not available)
 try:
@@ -282,6 +282,80 @@ async def get_queue_stats(
     """Get queue statistics."""
     stats = await orch.get_queue_stats()
     return stats
+
+
+# Operator Dashboard endpoint
+@app.get("/api/v1/ops/status")
+async def get_ops_status(
+    orch: JobOrchestrator = Depends(get_orchestrator),
+):
+    """
+    Operator Dashboard: Health, queue depth, recent jobs, and success rate.
+    
+    Returns:
+        - health: Service health status
+        - queue_depth: Current number of jobs in queue
+        - recent_jobs: List of recent jobs (last 10)
+        - success_rate: Success rate percentage (last 100 jobs)
+    """
+    from sqlmodel import select, func, desc
+    from datetime import datetime, timedelta
+    
+    # Get queue depth
+    queue_depth = await orch.get_queue_depth()
+    
+    # Get recent jobs (last 10)
+    recent_jobs = []
+    async with db.session() as session:
+        statement = (
+            select(Job)
+            .order_by(desc(Job.created_at))
+            .limit(10)
+        )
+        result = await session.execute(statement)
+        jobs = result.scalars().all()
+        
+        for job in jobs:
+            recent_jobs.append({
+                "job_id": job.id,
+                "domain": job.domain,
+                "status": job.status,
+                "job_type": job.job_type,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            })
+    
+    # Calculate success rate (last 100 jobs)
+    success_rate = 0.0
+    async with db.session() as session:
+        # Get last 100 completed jobs
+        statement = (
+            select(Job)
+            .where(Job.completed_at.isnot(None))
+            .order_by(desc(Job.completed_at))
+            .limit(100)
+        )
+        result = await session.execute(statement)
+        completed_jobs = result.scalars().all()
+        
+        if completed_jobs:
+            successful = sum(1 for job in completed_jobs if job.status == "completed")
+            success_rate = (successful / len(completed_jobs)) * 100.0
+    
+    # Get overall health
+    health = "healthy"
+    if queue_depth > 1000:
+        health = "degraded"
+    if queue_depth > 5000:
+        health = "unhealthy"
+    
+    return {
+        "health": health,
+        "queue_depth": queue_depth,
+        "recent_jobs": recent_jobs,
+        "success_rate": round(success_rate, 2),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 # Root endpoint
