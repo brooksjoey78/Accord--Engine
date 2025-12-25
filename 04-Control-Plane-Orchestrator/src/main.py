@@ -84,12 +84,15 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("control_plane_starting")
     
-    # Initialize database (with error handling)
+    # Initialize database (with error handling and timeout)
     try:
-        await db.init_models()
+        import asyncio
+        await asyncio.wait_for(db.init_models(), timeout=5.0)
         logger.info("database_initialized")
+    except asyncio.TimeoutError:
+        logger.warning("database_init_timeout - continuing without database initialization")
     except Exception as e:
-        logger.error("database_init_failed", error=str(e))
+        logger.error("database_init_failed", error=str(e), error_type=type(e).__name__)
         # Continue anyway - database might be temporarily unavailable
         # The app can still serve requests, but job operations will fail
     
