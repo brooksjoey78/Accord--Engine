@@ -298,49 +298,67 @@ async def get_ops_status(
         - recent_jobs: List of recent jobs (last 10)
         - success_rate: Success rate percentage (last 100 jobs)
     """
-    from sqlmodel import select, func, desc
-    from datetime import datetime, timedelta
+    from sqlmodel import select, desc
+    from datetime import datetime
     
-    # Get queue depth
-    queue_depth = await orch.get_queue_depth()
+    try:
+        # Get queue depth
+        queue_depth = await orch.get_queue_depth()
+    except Exception as e:
+        logger.error("ops_status_queue_depth_error", error=str(e))
+        queue_depth = 0
     
     # Get recent jobs (last 10)
     recent_jobs = []
-    async with db.session() as session:
-        statement = (
-            select(Job)
-            .order_by(desc(Job.created_at))
-            .limit(10)
-        )
-        result = await session.execute(statement)
-        jobs = result.scalars().all()
-        
-        for job in jobs:
-            recent_jobs.append({
-                "job_id": job.id,
-                "domain": job.domain,
-                "status": job.status,
-                "job_type": job.job_type,
-                "created_at": job.created_at.isoformat() if job.created_at else None,
-                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-            })
+    try:
+        async with db.session() as session:
+            statement = (
+                select(Job)
+                .order_by(desc(Job.created_at))
+                .limit(10)
+            )
+            result = await session.execute(statement)
+            jobs = result.scalars().all()
+            
+            for job in jobs:
+                # Handle enum status
+                status_value = job.status.value if isinstance(job.status, JobStatus) else str(job.status)
+                recent_jobs.append({
+                    "job_id": job.id,
+                    "domain": job.domain,
+                    "status": status_value,
+                    "job_type": job.job_type,
+                    "created_at": job.created_at.isoformat() if job.created_at else None,
+                    "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                })
+    except Exception as e:
+        logger.error("ops_status_recent_jobs_error", error=str(e))
+        # Continue with empty list
     
     # Calculate success rate (last 100 jobs)
     success_rate = 0.0
-    async with db.session() as session:
-        # Get last 100 completed jobs
-        statement = (
-            select(Job)
-            .where(Job.completed_at.isnot(None))
-            .order_by(desc(Job.completed_at))
-            .limit(100)
-        )
-        result = await session.execute(statement)
-        completed_jobs = result.scalars().all()
-        
-        if completed_jobs:
-            successful = sum(1 for job in completed_jobs if job.status == "completed")
-            success_rate = (successful / len(completed_jobs)) * 100.0
+    try:
+        async with db.session() as session:
+            # Get last 100 completed jobs
+            statement = (
+                select(Job)
+                .where(Job.completed_at.isnot(None))
+                .order_by(desc(Job.completed_at))
+                .limit(100)
+            )
+            result = await session.execute(statement)
+            completed_jobs = result.scalars().all()
+            
+            if completed_jobs:
+                # Handle both enum and string status values
+                successful = sum(
+                    1 for job in completed_jobs 
+                    if (job.status == JobStatus.COMPLETED if isinstance(job.status, JobStatus) else str(job.status) == "completed")
+                )
+                success_rate = (successful / len(completed_jobs)) * 100.0
+    except Exception as e:
+        logger.error("ops_status_success_rate_error", error=str(e))
+        # Continue with 0.0
     
     # Get overall health
     health = "healthy"
